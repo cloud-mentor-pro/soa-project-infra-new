@@ -25,7 +25,7 @@ skills, commands, agents trong thư mục `.claude/`.
 Internet
     │
     ▼
-[Route53]  api.{your-domain}  (A record → ALB alias, tạo tự động trong stack compute)
+[Route53]  api-dev.{your-domain}  (A record → ALB alias, tạo tự động trong stack compute)
     │
     ▼
 [ALB]  internet-facing  ·  Public Subnet 1a + 1c

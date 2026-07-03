@@ -59,35 +59,21 @@ Không có bước này thì bỏ qua Stack 3 (Domain) và Listener 443 trong St
 
 ---
 
-## 2. Lấy Hosted Zone ID
+## 2. Lấy Hosted Zone ID và Hosted Zone name
+Lấy 2 thông tin này ở account của bạn để setting vào param
 
-Liệt kê toàn bộ Hosted Zone trong account:
-
-```bash
-aws route53 list-hosted-zones \
-  --profile soa-dev --region us-east-1 \
-  --query 'HostedZones[*].{ID:Id,Name:Name}' \
-  --output table
-```
-
-Tìm dòng có cột `Name` khớp domain của bạn, lấy phần ID dạng `/hostedzone/XXXXXXXXXXXXX` →
-chỉ điền phần sau `/hostedzone/` vào `parameters/dev-domain.json` (bước tiếp theo).
+![Lấy Hosted Zone ID và Hosted Zone name](image/get-hosted-zone-info.png)
 
 ---
 
 ## 3. Điền parameters
 
-Tối thiểu cần sửa 4 file sau (còn lại đã có default hợp lý, review thêm nếu muốn đổi CIDR,
+Tối thiểu cần sửa 2 file sau (còn lại đã có default hợp lý, review thêm nếu muốn đổi CIDR,
 instance class, resource ECS...):
 
 ```bash
-code parameters/dev-domain.json    # HostedZoneName, HostedZoneId, SubDomain
-code parameters/dev-database.json  # MasterUsername
-code parameters/dev-config.json    # AppSecretKey — dùng: openssl rand -hex 32
+code parameters/dev-domain.json    # HostedZoneName, HostedZoneId
 code parameters/dev-compute.json   # AppDomainName — phải khớp SubDomain.HostedZoneName ở trên
-                                    # (vd: SubDomain=api-dev, HostedZoneName=example.com
-                                    #  → AppDomainName=api-dev.example.com). Chỉ dùng để
-                                    # hiển thị AppUrl, không dùng cho cert/DNS record.
 ```
 
 ---
@@ -96,13 +82,6 @@ code parameters/dev-compute.json   # AppDomainName — phải khớp SubDomain.H
 
 ```bash
 cfn-lint templates/**/*.yaml
-
-for layer in networking security domain database config compute bastion; do
-  echo "--- $layer ---"
-  aws cloudformation validate-template \
-    --template-body file://templates/$layer/soa-$layer.yaml \
-    --profile soa-dev --region us-east-1
-done
 ```
 ✅ Không có ERROR (warning có thể bỏ qua).
 
@@ -261,6 +240,7 @@ echo "✅ Bastion ready"
 ---
 
 ## 12. Migrate Database qua Bastion
+Lấy command từ output lệnh bên dưới để login bastion:
 
 ```bash
 aws cloudformation describe-stacks \
@@ -294,8 +274,11 @@ DB_SECRET=$(aws secretsmanager get-secret-value --secret-id "$DB_SECRET_ARN" --q
 export DB_USER=$(echo "$DB_SECRET" | jq -r .username)
 export DB_PASSWORD=$(echo "$DB_SECRET" | jq -r .password)
 
+# Run container để migrate DB
 docker-compose -f docker-compose-dev.yml down
 docker-compose -f docker-compose-dev.yml up -d --build
+
+# Kiểm tra status của container
 docker-compose -f docker-compose-dev.yml ps
 ```
 

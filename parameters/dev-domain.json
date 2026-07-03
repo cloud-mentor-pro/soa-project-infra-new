@@ -9,10 +9,10 @@
   },
   {
     "ParameterKey": "HostedZoneName",
-    "ParameterValue": "codeland.cloudmentor.pro"
+    "ParameterValue": "{YOUR-Hosted-Zone-Name}"
   },
   {
     "ParameterKey": "HostedZoneId",
-    "ParameterValue": "Z0430621YGYAWO2UBJ7J"
+    "ParameterValue": "{YOUR-Hosted-Zone-Id}"
   }
 ]
