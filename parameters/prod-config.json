@@ -1,0 +1,5 @@
+[
+  { "ParameterKey": "Environment",       "ParameterValue": "prod" },
+  { "ParameterKey": "DatabaseStackName", "ParameterValue": "prod-soa-database" },
+  { "ParameterKey": "AppSecretKey",      "ParameterValue": "REPLACE_WITH_PROD_SECRET_KEY" }
+]

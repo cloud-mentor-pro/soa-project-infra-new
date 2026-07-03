@@ -1,0 +1,14 @@
+[
+  {
+    "ParameterKey": "Environment",
+    "ParameterValue": "dev"
+  },
+  {
+    "ParameterKey": "DatabaseStackName",
+    "ParameterValue": "dev-soa-database"
+  },
+  {
+    "ParameterKey": "AppSecretKey",
+    "ParameterValue": "d7c3946fce2c3112762c6b8eb953d194bd19bde841b1aa27738754a1d287cd09"
+  }
+]

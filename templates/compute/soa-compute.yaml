@@ -1,0 +1,440 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'soa - Compute layer: ECS Fargate, ALB (HTTPS via imported ACM cert), ECR, Auto Scaling. Credentials injected from Secrets Manager/SSM at task launch — never hardcoded.'
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, prod]
+
+  NetworkingStackName:
+    Type: String
+    Description: e.g. dev-soa-networking
+
+  SecurityStackName:
+    Type: String
+    Description: e.g. dev-soa-security
+
+  DatabaseStackName:
+    Type: String
+    Description: e.g. dev-soa-database
+
+  ConfigStackName:
+    Type: String
+    Description: e.g. dev-soa-config
+
+  DomainStackName:
+    Type: String
+    Description: e.g. dev-soa-domain — CertificateArn/DomainName/HostedZoneId all imported from here
+
+  AppDomainName:
+    Type: String
+    Description: >-
+      Full domain (SubDomain.HostedZoneName) — phải khớp giá trị thật trong parameters/{env}-domain.json.
+      Chỉ dùng để hiển thị AppUrl, không dùng cho cert/DNS record (2 cái đó vẫn import trực tiếp
+      từ stack domain để đảm bảo đúng nguồn sự thật).
+
+  ServiceName:
+    Type: String
+    Default: api
+
+  ContainerPort:
+    Type: Number
+    Default: 80
+
+  ContainerCpu:
+    Type: String
+    Default: 256
+
+  ContainerMemory:
+    Type: String
+    Default: 512
+
+  DesiredCount:
+    Type: Number
+    Default: 0
+    Description: Start at 0 — bump to 1+ after the first image is pushed to ECR
+
+  HealthCheckPath:
+    Type: String
+    Default: /users/ping
+
+  TargetCPUUtilization:
+    Type: Number
+    Default: 60
+    MinValue: 10
+    MaxValue: 90
+
+  TargetMemoryUtilization:
+    Type: Number
+    Default: 70
+    MinValue: 10
+    MaxValue: 90
+
+  MinCapacity:
+    Type: Number
+    Default: 0
+    MinValue: 0
+    Description: >-
+      Application Auto Scaling luôn enforce capacity >= MinCapacity ngay khi đăng ký —
+      nếu MinCapacity > DesiredCount ban đầu, service sẽ bị auto-scale lên ngay cả khi
+      chưa có image trong ECR. Set 0 cho tới khi CI/CD đã push image lần đầu.
+
+  MaxCapacity:
+    Type: Number
+    Default: 5
+    MinValue: 1
+
+Conditions:
+  IsDev: !Equals [!Ref Environment, dev]
+
+Resources:
+
+  # ── IAM — Execution role: pulls image, writes logs, injects secrets ────────
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Environment}-soa-role-ecs-execution-${ServiceName}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: ReadAppSecrets
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  Fn::ImportValue: !Sub '${DatabaseStackName}-DbSecretArn'
+              - Effect: Allow
+                Action: ssm:GetParameters
+                Resource:
+                  - Fn::Sub:
+                      - 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ParamPath}'
+                      - ParamPath:
+                          Fn::ImportValue: !Sub '${ConfigStackName}-ParamDbUrlName'
+                  - Fn::Sub:
+                      - 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ParamPath}'
+                      - ParamPath:
+                          Fn::ImportValue: !Sub '${ConfigStackName}-ParamSecretKeyName'
+      Tags:
+        - { Key: Name,        Value: !Sub '${Environment}-soa-role-ecs-execution-${ServiceName}' }
+        - { Key: Environment, Value: !Ref Environment }
+        - { Key: Project,     Value: soa }
+        - { Key: ManagedBy,   Value: CloudFormation }
+        - { Key: Layer,       Value: compute }
+
+  # ── IAM — Task role: runtime permissions for the app itself (empty by
+  #    default — add scoped policies here if the app calls AWS APIs directly) ─
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Environment}-soa-role-ecs-task-${ServiceName}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      Tags:
+        - { Key: Name,        Value: !Sub '${Environment}-soa-role-ecs-task-${ServiceName}' }
+        - { Key: Environment, Value: !Ref Environment }
+        - { Key: Project,     Value: soa }
+        - { Key: ManagedBy,   Value: CloudFormation }
+        - { Key: Layer,       Value: compute }
+
+  # ── ECR ──────────────────────────────────────────────────────────────────
+  EcrRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub '${Environment}-soa-ecr-${ServiceName}'
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [{
+              "rulePriority": 1,
+              "description": "Keep only 10 images",
+              "selection": { "tagStatus": "any", "countType": "imageCountMoreThan", "countNumber": 10 },
+              "action": { "type": "expire" }
+            }]
+          }
+      Tags:
+        - { Key: Name,        Value: !Sub '${Environment}-soa-ecr-${ServiceName}' }
+        - { Key: Environment, Value: !Ref Environment }
+        - { Key: Project,     Value: soa }
+        - { Key: ManagedBy,   Value: CloudFormation }
+        - { Key: Layer,       Value: compute }
+
+  # ── Logs ─────────────────────────────────────────────────────────────────
+  CloudWatchLogsGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/ecs/${Environment}-soa-${ServiceName}'
+      RetentionInDays: 14
+      Tags:
+        - { Key: Name,        Value: !Sub '${Environment}-soa-logs-${ServiceName}' }
+        - { Key: Environment, Value: !Ref Environment }
+        - { Key: Project,     Value: soa }
+        - { Key: ManagedBy,   Value: CloudFormation }
+        - { Key: Layer,       Value: compute }
+
+  # ── ALB ──────────────────────────────────────────────────────────────────
+  AlbMain:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub '${Environment}-soa-alb-${ServiceName}'
+      Scheme: internet-facing
+      Type: application
+      Subnets:
+        - Fn::ImportValue: !Sub '${NetworkingStackName}-SubnetPublic1aId'
+        - Fn::ImportValue: !Sub '${NetworkingStackName}-SubnetPublic1cId'
+      SecurityGroups:
+        - Fn::ImportValue: !Sub '${SecurityStackName}-SecurityGroupAlbId'
+      Tags:
+        - { Key: Name,        Value: !Sub '${Environment}-soa-alb-${ServiceName}' }
+        - { Key: Environment, Value: !Ref Environment }
+        - { Key: Project,     Value: soa }
+        - { Key: ManagedBy,   Value: CloudFormation }
+        - { Key: Layer,       Value: compute }
+
+  AlbTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub '${Environment}-soa-tg-${ServiceName}'
+      Port: !Ref ContainerPort
+      Protocol: HTTP
+      TargetType: ip
+      VpcId:
+        Fn::ImportValue: !Sub '${NetworkingStackName}-VpcId'
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: !Ref HealthCheckPath
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Tags:
+        - { Key: Name,        Value: !Sub '${Environment}-soa-tg-${ServiceName}' }
+        - { Key: Environment, Value: !Ref Environment }
+        - { Key: Project,     Value: soa }
+        - { Key: ManagedBy,   Value: CloudFormation }
+        - { Key: Layer,       Value: compute }
+
+  # HTTP :80 → redirect 301 to HTTPS — never forward directly (security-guardrails.md)
+  AlbListenerHttp:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref AlbMain
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: redirect
+          RedirectConfig:
+            Protocol: HTTPS
+            Port: '443'
+            StatusCode: HTTP_301
+
+  # HTTPS :443 → forward to target group
+  AlbListenerHttps:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref AlbMain
+      Port: 443
+      Protocol: HTTPS
+      SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
+      Certificates:
+        - CertificateArn:
+            Fn::ImportValue: !Sub '${DomainStackName}-CertificateArn'
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref AlbTargetGroup
+
+  # ── Route53 A-record → ALB alias ───────────────────────────────────────────
+  Route53RecordAlb:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId:
+        Fn::ImportValue: !Sub '${DomainStackName}-HostedZoneId'
+      Name:
+        Fn::ImportValue: !Sub '${DomainStackName}-DomainName'
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt AlbMain.DNSName
+        EvaluateTargetHealth: true
+        HostedZoneId: !GetAtt AlbMain.CanonicalHostedZoneID
+
+  # ── ECS Cluster ──────────────────────────────────────────────────────────
+  EcsCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub '${Environment}-soa-ecs-${ServiceName}'
+      ClusterSettings:
+        - { Name: containerInsights, Value: enabled }
+      Tags:
+        - { Key: Name,        Value: !Sub '${Environment}-soa-ecs-${ServiceName}' }
+        - { Key: Environment, Value: !Ref Environment }
+        - { Key: Project,     Value: soa }
+        - { Key: ManagedBy,   Value: CloudFormation }
+        - { Key: Layer,       Value: compute }
+
+  # ── Task Definition — secrets injected at launch, nothing hardcoded ────────
+  EcsTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${Environment}-soa-task-${ServiceName}'
+      Cpu: !Ref ContainerCpu
+      Memory: !Ref ContainerMemory
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [FARGATE]
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      ContainerDefinitions:
+        - Name: !Sub '${Environment}-soa-container-${ServiceName}'
+          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${Environment}-soa-ecr-${ServiceName}:latest'
+          Essential: true
+          PortMappings:
+            - ContainerPort: !Ref ContainerPort
+          Environment:
+            - { Name: FLASK_APP, Value: project/__init__.py }
+            - { Name: FLASK_DEBUG, Value: !If [IsDev, '1', '0'] }
+            - { Name: APP_SETTINGS, Value: !If [IsDev, project.config.DevelopmentConfig, project.config.ProductionConfig] }
+            - { Name: AWS_REGION, Value: !Ref AWS::Region }
+            # DB_PORT cố định 5432 — RDS không override Port trong soa-database.yaml nên
+            # engine luôn dùng default port của postgres.
+            - { Name: DB_PORT, Value: '5432' }
+            - Name: DB_NAME
+              Value: { Fn::ImportValue: !Sub '${DatabaseStackName}-DbName' }
+          Secrets:
+            - Name: DB_USER
+              ValueFrom:
+                Fn::Sub:
+                  - '${SecretArn}:username::'
+                  - SecretArn: { Fn::ImportValue: !Sub '${DatabaseStackName}-DbSecretArn' }
+            - Name: DB_PASSWORD
+              ValueFrom:
+                Fn::Sub:
+                  - '${SecretArn}:password::'
+                  - SecretArn: { Fn::ImportValue: !Sub '${DatabaseStackName}-DbSecretArn' }
+            - Name: DB_URL
+              ValueFrom:
+                Fn::Sub:
+                  - 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ParamPath}'
+                  - ParamPath: { Fn::ImportValue: !Sub '${ConfigStackName}-ParamDbUrlName' }
+            - Name: SECRET_KEY
+              ValueFrom:
+                Fn::Sub:
+                  - 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ParamPath}'
+                  - ParamPath: { Fn::ImportValue: !Sub '${ConfigStackName}-ParamSecretKeyName' }
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref CloudWatchLogsGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+      Tags:
+        - { Key: Name,        Value: !Sub '${Environment}-soa-task-${ServiceName}' }
+        - { Key: Environment, Value: !Ref Environment }
+        - { Key: Project,     Value: soa }
+        - { Key: ManagedBy,   Value: CloudFormation }
+        - { Key: Layer,       Value: compute }
+
+  # ── Service ──────────────────────────────────────────────────────────────
+  EcsService:
+    Type: AWS::ECS::Service
+    DependsOn: AlbListenerHttps
+    Properties:
+      Cluster: !Ref EcsCluster
+      ServiceName: !Sub '${Environment}-soa-svc-${ServiceName}'
+      TaskDefinition: !Ref EcsTaskDefinition
+      DesiredCount: !Ref DesiredCount
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          SecurityGroups:
+            - Fn::ImportValue: !Sub '${SecurityStackName}-SecurityGroupEcsId'
+          Subnets:
+            - Fn::ImportValue: !Sub '${NetworkingStackName}-SubnetPrivateApp1aId'
+            - Fn::ImportValue: !Sub '${NetworkingStackName}-SubnetPrivateApp1cId'
+      LoadBalancers:
+        - ContainerName: !Sub '${Environment}-soa-container-${ServiceName}'
+          ContainerPort: !Ref ContainerPort
+          TargetGroupArn: !Ref AlbTargetGroup
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 50
+      Tags:
+        - { Key: Name,        Value: !Sub '${Environment}-soa-svc-${ServiceName}' }
+        - { Key: Environment, Value: !Ref Environment }
+        - { Key: Project,     Value: soa }
+        - { Key: ManagedBy,   Value: CloudFormation }
+        - { Key: Layer,       Value: compute }
+
+  # ── Auto Scaling ─────────────────────────────────────────────────────────
+  AutoScalingTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    DependsOn: EcsService
+    Properties:
+      ServiceNamespace: ecs
+      ResourceId: !Sub 'service/${EcsCluster}/${Environment}-soa-svc-${ServiceName}'
+      ScalableDimension: ecs:service:DesiredCount
+      MinCapacity: !Ref MinCapacity
+      MaxCapacity: !Ref MaxCapacity
+      RoleARN: !Sub 'arn:aws:iam::${AWS::AccountId}:role/aws-service-role/ecs.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_ECSService'
+
+  CpuScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub '${Environment}-soa-scaling-${ServiceName}-cpu'
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref AutoScalingTarget
+      TargetTrackingScalingPolicyConfiguration:
+        PredefinedMetricSpecification: { PredefinedMetricType: ECSServiceAverageCPUUtilization }
+        TargetValue: !Ref TargetCPUUtilization
+        ScaleOutCooldown: 300
+        ScaleInCooldown: 300
+
+  MemoryScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub '${Environment}-soa-scaling-${ServiceName}-memory'
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref AutoScalingTarget
+      TargetTrackingScalingPolicyConfiguration:
+        PredefinedMetricSpecification: { PredefinedMetricType: ECSServiceAverageMemoryUtilization }
+        TargetValue: !Ref TargetMemoryUtilization
+        ScaleOutCooldown: 300
+        ScaleInCooldown: 300
+
+Outputs:
+  EcrRepositoryUri:
+    Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${Environment}-soa-ecr-${ServiceName}'
+    Export: { Name: !Sub '${AWS::StackName}-EcrRepositoryUri' }
+
+  AlbDnsName:
+    Value: !GetAtt AlbMain.DNSName
+    Export: { Name: !Sub '${AWS::StackName}-AlbDnsName' }
+
+  # Dùng Ref tới Parameter AppDomainName (nhập tay, khớp giá trị thật của stack domain) thay
+  # vì Fn::ImportValue — chỉ để tiện hiển thị URL, không phải giá trị chức năng. Không Export.
+  AppUrl:
+    Value: !Sub 'https://${AppDomainName}'
+
+  EcsClusterName:
+    Value: !Ref EcsCluster
+    Export: { Name: !Sub '${AWS::StackName}-EcsClusterName' }
+
+  EcsServiceName:
+    Value: !GetAtt EcsService.Name
+    Export: { Name: !Sub '${AWS::StackName}-EcsServiceName' }
+
+  TaskExecutionRoleArn:
+    Value: !GetAtt TaskExecutionRole.Arn
+    Export: { Name: !Sub '${AWS::StackName}-TaskExecutionRoleArn' }
+
+  TaskRoleArn:
+    Value: !GetAtt TaskRole.Arn
+    Export: { Name: !Sub '${AWS::StackName}-TaskRoleArn' }

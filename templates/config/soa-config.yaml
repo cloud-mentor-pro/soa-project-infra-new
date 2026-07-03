@@ -1,0 +1,87 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'soa - Config layer: SSM Parameters, auto-populated from the database stack (no manual console updates)'
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, prod]
+
+  DatabaseStackName:
+    Type: String
+    Description: e.g. dev-soa-database
+
+  AppSecretKey:
+    Type: String
+    NoEcho: true
+    Description: Flask SECRET_KEY for the backend application
+
+Resources:
+
+  # ── App secret key ──────────────────────────────────────────────────────────
+  ParamSecretKey:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/soa/${Environment}/secret-key'
+      Type: String
+      Value: !Ref AppSecretKey
+      Description: 'Secret key for soa application encryption'
+      Tags:
+        Environment: !Ref Environment
+        Project: soa
+        ManagedBy: CloudFormation
+        Layer: config
+
+  # ── DB URL — bare hostname, built from database stack output ───────────────
+  # QUAN TRỌNG: backend app (entrypoint.sh: `nc -z $DB_URL $DB_PORT`) coi DB_URL là
+  # HOSTNAME THUẦN, không phải "host:port/dbname" — khớp default `DB_URL=${DB_URL:-db}`
+  # trong docker-compose-dev.yml (chỉ tên host "db", không có port/path). Port/dbname
+  # đi qua DB_PORT/DB_NAME riêng (xem soa-compute.yaml, soa-bastion.yaml).
+  ParamDbUrl:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/soa/${Environment}/db-url'
+      Type: String
+      Value:
+        Fn::ImportValue: !Sub '${DatabaseStackName}-DbInstanceEndpointAddress'
+      Description: 'PostgreSQL host (bare hostname, không có port/path) cho soa application'
+      Tags:
+        Environment: !Ref Environment
+        Project: soa
+        ManagedBy: CloudFormation
+        Layer: config
+
+  # ── DB credentials secret ARN — app/bastion call GetSecretValue at runtime ─
+  ParamDbSecretArn:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/soa/${Environment}/db-secret-arn'
+      Type: String
+      Value:
+        Fn::ImportValue: !Sub '${DatabaseStackName}-DbSecretArn'
+      Description: 'Secrets Manager ARN holding RDS master username/password for soa application'
+      Tags:
+        Environment: !Ref Environment
+        Project: soa
+        ManagedBy: CloudFormation
+        Layer: config
+
+Outputs:
+  ParamSecretKeyName:
+    Value: !Ref ParamSecretKey
+    Export: { Name: !Sub '${AWS::StackName}-ParamSecretKeyName' }
+
+  ParamDbUrlName:
+    Value: !Ref ParamDbUrl
+    Export: { Name: !Sub '${AWS::StackName}-ParamDbUrlName' }
+
+  ParamDbSecretArnName:
+    Value: !Ref ParamDbSecretArn
+    Export: { Name: !Sub '${AWS::StackName}-ParamDbSecretArnName' }
+
+  ParamSecretKeyArn:
+    Value: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ParamSecretKey}'
+    Export: { Name: !Sub '${AWS::StackName}-ParamSecretKeyArn' }
+
+  ParamDbUrlArn:
+    Value: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${ParamDbUrl}'
+    Export: { Name: !Sub '${AWS::StackName}-ParamDbUrlArn' }

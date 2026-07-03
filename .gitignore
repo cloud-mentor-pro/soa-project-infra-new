@@ -1,0 +1,12 @@
+# Personal Claude overrides
+.claude/
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+
+# cfn-lint cache
+.cfnlintrc

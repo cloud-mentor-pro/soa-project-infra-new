@@ -1,0 +1,127 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'soa - Database layer: RDS PostgreSQL with Secrets Manager managed master password (fully automated, zero manual steps)'
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, prod]
+
+  NetworkingStackName:
+    Type: String
+    Description: e.g. dev-soa-networking
+
+  SecurityStackName:
+    Type: String
+    Description: e.g. dev-soa-security
+
+  DBInstanceClass:
+    Type: String
+    Default: db.t3.micro
+    AllowedValues: [db.t3.micro, db.t3.small, db.t3.medium, db.t4g.micro, db.t4g.small]
+
+  DBAllocatedStorage:
+    Type: Number
+    Default: 20
+    MinValue: 20
+    Description: Storage in GB
+
+  DBEngineVersion:
+    Type: String
+    Default: '18.3'
+    Description: >-
+      PostgreSQL engine version. RDS deprecates old minor versions over time — nếu
+      "Cannot find version X for postgres", chạy: aws rds describe-db-engine-versions
+      --engine postgres --query "DBEngineVersions[].EngineVersion"
+      để lấy version còn khả dụng trong account/region của bạn.
+
+  DBName:
+    Type: String
+    Default: dev
+    Description: Initial database name created on first boot
+
+  MasterUsername:
+    Type: String
+    NoEcho: true
+    Description: No default on purpose (cfn-nag F24) — always supply via parameters/{env}-database.json
+
+Conditions:
+  IsProd: !Equals [!Ref Environment, prod]
+
+Resources:
+
+  # ── Subnet Group — spans the two isolated private-db subnets ──────────────
+  DbSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupName: !Sub '${Environment}-soa-db-subnet-group'
+      DBSubnetGroupDescription: !Sub 'Private DB subnets for ${Environment} soa RDS'
+      SubnetIds:
+        - Fn::ImportValue: !Sub '${NetworkingStackName}-SubnetPrivateDb1aId'
+        - Fn::ImportValue: !Sub '${NetworkingStackName}-SubnetPrivateDb1cId'
+      Tags:
+        - { Key: Name,        Value: !Sub '${Environment}-soa-db-subnet-group' }
+        - { Key: Environment, Value: !Ref Environment }
+        - { Key: Project,     Value: soa }
+        - { Key: ManagedBy,   Value: CloudFormation }
+        - { Key: Layer,       Value: database }
+
+  # ── RDS PostgreSQL — master password auto-generated & rotated in Secrets
+  #    Manager. Replaces the old manual "Credentials management" console step.
+  # DeletionPolicy: Delete — cố ý, không giữ snapshot khi xoá stack (dự án demo/dev, không
+  # cần backup residual). DeletionProtection vẫn bật ở prod (property riêng, chặn xoá nhầm
+  # qua API/console cho tới khi tắt tay) — 2 cơ chế độc lập, không mâu thuẫn.
+  DbInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      DBInstanceIdentifier: !Sub '${Environment}-soa-rds-database'
+      Engine: postgres
+      EngineVersion: !Ref DBEngineVersion
+      DBInstanceClass: !Ref DBInstanceClass
+      AllocatedStorage: !Ref DBAllocatedStorage
+      StorageType: gp3
+      StorageEncrypted: true
+      DBName: !Ref DBName
+      MasterUsername: !Ref MasterUsername
+      ManageMasterUserPassword: true
+      DBSubnetGroupName: !Ref DbSubnetGroup
+      VPCSecurityGroups:
+        - Fn::ImportValue: !Sub '${SecurityStackName}-SecurityGroupDbId'
+      PubliclyAccessible: false
+      DeletionProtection: !If [IsProd, true, false]
+      MultiAZ: !If [IsProd, true, false]
+      BackupRetentionPeriod: !If [IsProd, 7, 1]
+      EnablePerformanceInsights: true
+      EnableCloudwatchLogsExports: [postgresql]
+      AutoMinorVersionUpgrade: true
+      Tags:
+        - { Key: Name,        Value: !Sub '${Environment}-soa-rds-database' }
+        - { Key: Environment, Value: !Ref Environment }
+        - { Key: Project,     Value: soa }
+        - { Key: ManagedBy,   Value: CloudFormation }
+        - { Key: Layer,       Value: database }
+
+Outputs:
+  DbInstanceIdentifier:
+    Value: !Ref DbInstance
+    Export: { Name: !Sub '${AWS::StackName}-DbInstanceIdentifier' }
+
+  DbInstanceEndpointAddress:
+    Value: !GetAtt DbInstance.Endpoint.Address
+    Export: { Name: !Sub '${AWS::StackName}-DbInstanceEndpointAddress' }
+
+  DbInstancePort:
+    Value: !GetAtt DbInstance.Endpoint.Port
+    Export: { Name: !Sub '${AWS::StackName}-DbInstancePort' }
+
+  DbName:
+    Value: !Ref DBName
+    Export: { Name: !Sub '${AWS::StackName}-DbName' }
+
+  # Secrets Manager ARN holding {username, password, host, port, dbname} —
+  # auto-created and auto-rotatable by RDS. Downstream stacks (config, compute,
+  # bastion) import this directly — no manual copy/paste of credentials ever.
+  DbSecretArn:
+    Value: !GetAtt DbInstance.MasterUserSecret.SecretArn
+    Export: { Name: !Sub '${AWS::StackName}-DbSecretArn' }

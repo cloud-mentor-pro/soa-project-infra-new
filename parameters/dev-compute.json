@@ -1,0 +1,19 @@
+[
+  { "ParameterKey": "Environment",             "ParameterValue": "dev" },
+  { "ParameterKey": "NetworkingStackName",     "ParameterValue": "dev-soa-networking" },
+  { "ParameterKey": "SecurityStackName",       "ParameterValue": "dev-soa-security" },
+  { "ParameterKey": "DatabaseStackName",       "ParameterValue": "dev-soa-database" },
+  { "ParameterKey": "ConfigStackName",         "ParameterValue": "dev-soa-config" },
+  { "ParameterKey": "DomainStackName",         "ParameterValue": "dev-soa-domain" },
+  { "ParameterKey": "AppDomainName",           "ParameterValue": "api-dev.codeland.cloudmentor.pro" },
+  { "ParameterKey": "ServiceName",             "ParameterValue": "api" },
+  { "ParameterKey": "ContainerPort",           "ParameterValue": "80" },
+  { "ParameterKey": "ContainerCpu",            "ParameterValue": "256" },
+  { "ParameterKey": "ContainerMemory",         "ParameterValue": "512" },
+  { "ParameterKey": "DesiredCount",            "ParameterValue": "0" },
+  { "ParameterKey": "HealthCheckPath",         "ParameterValue": "/users/ping" },
+  { "ParameterKey": "TargetCPUUtilization",    "ParameterValue": "60" },
+  { "ParameterKey": "TargetMemoryUtilization", "ParameterValue": "70" },
+  { "ParameterKey": "MinCapacity",             "ParameterValue": "0" },
+  { "ParameterKey": "MaxCapacity",             "ParameterValue": "5" }
+]

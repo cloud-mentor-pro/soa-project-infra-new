@@ -1,0 +1,365 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'soa - Networking layer: 3-tier VPC (public / private-app / private-db), NAT, Route Tables, S3 Gateway Endpoint'
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, prod]
+    Description: Deployment environment
+
+  VpcCidr:
+    Type: String
+    Default: 10.0.0.0/16
+
+  PublicSubnet1aCidr:
+    Type: String
+    Default: 10.0.1.0/24
+
+  PublicSubnet1cCidr:
+    Type: String
+    Default: 10.0.2.0/24
+
+  PrivateAppSubnet1aCidr:
+    Type: String
+    Default: 10.0.11.0/24
+
+  PrivateAppSubnet1cCidr:
+    Type: String
+    Default: 10.0.12.0/24
+
+  PrivateDbSubnet1aCidr:
+    Type: String
+    Default: 10.0.21.0/24
+
+  PrivateDbSubnet1cCidr:
+    Type: String
+    Default: 10.0.22.0/24
+
+Conditions:
+  IsProd: !Equals [!Ref Environment, prod]
+
+Resources:
+
+  # ── VPC ────────────────────────────────────────────────────────────────────
+  VpcMain:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - { Key: Name,        Value: !Sub '${Environment}-soa-vpc-main' }
+        - { Key: Environment, Value: !Ref Environment }
+        - { Key: Project,     Value: soa }
+        - { Key: ManagedBy,   Value: CloudFormation }
+        - { Key: Layer,       Value: networking }
+
+  InternetGatewayMain:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - { Key: Name,        Value: !Sub '${Environment}-soa-igw-main' }
+        - { Key: Environment, Value: !Ref Environment }
+        - { Key: Project,     Value: soa }
+        - { Key: ManagedBy,   Value: CloudFormation }
+        - { Key: Layer,       Value: networking }
+
+  VpcGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VpcMain
+      InternetGatewayId: !Ref InternetGatewayMain
+
+  # ── Subnets — Public (ALB, NAT) ────────────────────────────────────────────
+  SubnetPublic1a:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VpcMain
+      CidrBlock: !Ref PublicSubnet1aCidr
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - { Key: Name,        Value: !Sub '${Environment}-soa-subnet-public-1a' }
+        - { Key: Environment, Value: !Ref Environment }
+        - { Key: Project,     Value: soa }
+        - { Key: ManagedBy,   Value: CloudFormation }
+        - { Key: Layer,       Value: networking }
+
+  SubnetPublic1c:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VpcMain
+      CidrBlock: !Ref PublicSubnet1cCidr
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - { Key: Name,        Value: !Sub '${Environment}-soa-subnet-public-1c' }
+        - { Key: Environment, Value: !Ref Environment }
+        - { Key: Project,     Value: soa }
+        - { Key: ManagedBy,   Value: CloudFormation }
+        - { Key: Layer,       Value: networking }
+
+  # ── Subnets — Private App (ECS tasks, Bastion) ─────────────────────────────
+  SubnetPrivateApp1a:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VpcMain
+      CidrBlock: !Ref PrivateAppSubnet1aCidr
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: false
+      Tags:
+        - { Key: Name,        Value: !Sub '${Environment}-soa-subnet-private-app-1a' }
+        - { Key: Environment, Value: !Ref Environment }
+        - { Key: Project,     Value: soa }
+        - { Key: ManagedBy,   Value: CloudFormation }
+        - { Key: Layer,       Value: networking }
+
+  SubnetPrivateApp1c:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VpcMain
+      CidrBlock: !Ref PrivateAppSubnet1cCidr
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: false
+      Tags:
+        - { Key: Name,        Value: !Sub '${Environment}-soa-subnet-private-app-1c' }
+        - { Key: Environment, Value: !Ref Environment }
+        - { Key: Project,     Value: soa }
+        - { Key: ManagedBy,   Value: CloudFormation }
+        - { Key: Layer,       Value: networking }
+
+  # ── Subnets — Private DB (isolated, no internet route) ─────────────────────
+  SubnetPrivateDb1a:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VpcMain
+      CidrBlock: !Ref PrivateDbSubnet1aCidr
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: false
+      Tags:
+        - { Key: Name,        Value: !Sub '${Environment}-soa-subnet-private-db-1a' }
+        - { Key: Environment, Value: !Ref Environment }
+        - { Key: Project,     Value: soa }
+        - { Key: ManagedBy,   Value: CloudFormation }
+        - { Key: Layer,       Value: networking }
+
+  SubnetPrivateDb1c:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VpcMain
+      CidrBlock: !Ref PrivateDbSubnet1cCidr
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: false
+      Tags:
+        - { Key: Name,        Value: !Sub '${Environment}-soa-subnet-private-db-1c' }
+        - { Key: Environment, Value: !Ref Environment }
+        - { Key: Project,     Value: soa }
+        - { Key: ManagedBy,   Value: CloudFormation }
+        - { Key: Layer,       Value: networking }
+
+  # ── Public Route Table ─────────────────────────────────────────────────────
+  RouteTablePublic:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VpcMain
+      Tags:
+        - { Key: Name,        Value: !Sub '${Environment}-soa-rtb-public' }
+        - { Key: Environment, Value: !Ref Environment }
+        - { Key: Project,     Value: soa }
+        - { Key: ManagedBy,   Value: CloudFormation }
+        - { Key: Layer,       Value: networking }
+
+  RoutePublicInternet:
+    Type: AWS::EC2::Route
+    DependsOn: VpcGatewayAttachment
+    Properties:
+      RouteTableId: !Ref RouteTablePublic
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGatewayMain
+
+  AssocPublic1a:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubnetPublic1a
+      RouteTableId: !Ref RouteTablePublic
+
+  AssocPublic1c:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubnetPublic1c
+      RouteTableId: !Ref RouteTablePublic
+
+  # ── NAT Gateway — Primary AZ-A (always created) ───────────────────────────
+  EipNat1a:
+    Type: AWS::EC2::EIP
+    DependsOn: VpcGatewayAttachment
+    Properties:
+      Domain: vpc
+      Tags:
+        - { Key: Name,        Value: !Sub '${Environment}-soa-eip-nat-1a' }
+        - { Key: Environment, Value: !Ref Environment }
+        - { Key: Project,     Value: soa }
+        - { Key: ManagedBy,   Value: CloudFormation }
+        - { Key: Layer,       Value: networking }
+
+  NatGateway1a:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt EipNat1a.AllocationId
+      SubnetId: !Ref SubnetPublic1a
+      Tags:
+        - { Key: Name,        Value: !Sub '${Environment}-soa-nat-1a' }
+        - { Key: Environment, Value: !Ref Environment }
+        - { Key: Project,     Value: soa }
+        - { Key: ManagedBy,   Value: CloudFormation }
+        - { Key: Layer,       Value: networking }
+
+  # ── NAT Gateway — Secondary AZ-C (prod only, HA) ──────────────────────────
+  EipNat1c:
+    Type: AWS::EC2::EIP
+    Condition: IsProd
+    DependsOn: VpcGatewayAttachment
+    Properties:
+      Domain: vpc
+      Tags:
+        - { Key: Name,        Value: !Sub '${Environment}-soa-eip-nat-1c' }
+        - { Key: Environment, Value: !Ref Environment }
+        - { Key: Project,     Value: soa }
+        - { Key: ManagedBy,   Value: CloudFormation }
+        - { Key: Layer,       Value: networking }
+
+  NatGateway1c:
+    Type: AWS::EC2::NatGateway
+    Condition: IsProd
+    Properties:
+      AllocationId: !GetAtt EipNat1c.AllocationId
+      SubnetId: !Ref SubnetPublic1c
+      Tags:
+        - { Key: Name,        Value: !Sub '${Environment}-soa-nat-1c' }
+        - { Key: Environment, Value: !Ref Environment }
+        - { Key: Project,     Value: soa }
+        - { Key: ManagedBy,   Value: CloudFormation }
+        - { Key: Layer,       Value: networking }
+
+  # ── Private App Route Tables (egress via NAT — package installs, ECR pulls) ─
+  RouteTablePrivateApp1a:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VpcMain
+      Tags:
+        - { Key: Name,        Value: !Sub '${Environment}-soa-rtb-private-app-1a' }
+        - { Key: Environment, Value: !Ref Environment }
+        - { Key: Project,     Value: soa }
+        - { Key: ManagedBy,   Value: CloudFormation }
+        - { Key: Layer,       Value: networking }
+
+  RoutePrivateApp1aInternet:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref RouteTablePrivateApp1a
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway1a
+
+  AssocPrivateApp1a:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubnetPrivateApp1a
+      RouteTableId: !Ref RouteTablePrivateApp1a
+
+  RouteTablePrivateApp1c:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VpcMain
+      Tags:
+        - { Key: Name,        Value: !Sub '${Environment}-soa-rtb-private-app-1c' }
+        - { Key: Environment, Value: !Ref Environment }
+        - { Key: Project,     Value: soa }
+        - { Key: ManagedBy,   Value: CloudFormation }
+        - { Key: Layer,       Value: networking }
+
+  RoutePrivateApp1cInternet:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref RouteTablePrivateApp1c
+      DestinationCidrBlock: 0.0.0.0/0
+      # dev: cả 2 AZ dùng chung NAT 1a | prod: AZ-C dùng NAT 1c riêng (HA)
+      NatGatewayId: !If [IsProd, !Ref NatGateway1c, !Ref NatGateway1a]
+
+  AssocPrivateApp1c:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubnetPrivateApp1c
+      RouteTableId: !Ref RouteTablePrivateApp1c
+
+  # ── Private DB Route Table (isolated — no 0.0.0.0/0 route, only S3 gateway) ─
+  RouteTablePrivateDb:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VpcMain
+      Tags:
+        - { Key: Name,        Value: !Sub '${Environment}-soa-rtb-private-db' }
+        - { Key: Environment, Value: !Ref Environment }
+        - { Key: Project,     Value: soa }
+        - { Key: ManagedBy,   Value: CloudFormation }
+        - { Key: Layer,       Value: networking }
+
+  AssocPrivateDb1a:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubnetPrivateDb1a
+      RouteTableId: !Ref RouteTablePrivateDb
+
+  AssocPrivateDb1c:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubnetPrivateDb1c
+      RouteTableId: !Ref RouteTablePrivateDb
+
+  # ── S3 Gateway Endpoint (app + db tiers — no NAT cost for S3 traffic) ──────
+  S3GatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VpcMain
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'
+      VpcEndpointType: Gateway
+      RouteTableIds:
+        - !Ref RouteTablePrivateApp1a
+        - !Ref RouteTablePrivateApp1c
+        - !Ref RouteTablePrivateDb
+
+Outputs:
+  VpcId:
+    Value: !Ref VpcMain
+    Export: { Name: !Sub '${AWS::StackName}-VpcId' }
+
+  VpcCidr:
+    Value: !Ref VpcCidr
+    Export: { Name: !Sub '${AWS::StackName}-VpcCidr' }
+
+  SubnetPublic1aId:
+    Value: !Ref SubnetPublic1a
+    Export: { Name: !Sub '${AWS::StackName}-SubnetPublic1aId' }
+
+  SubnetPublic1cId:
+    Value: !Ref SubnetPublic1c
+    Export: { Name: !Sub '${AWS::StackName}-SubnetPublic1cId' }
+
+  SubnetPrivateApp1aId:
+    Value: !Ref SubnetPrivateApp1a
+    Export: { Name: !Sub '${AWS::StackName}-SubnetPrivateApp1aId' }
+
+  SubnetPrivateApp1cId:
+    Value: !Ref SubnetPrivateApp1c
+    Export: { Name: !Sub '${AWS::StackName}-SubnetPrivateApp1cId' }
+
+  SubnetPrivateDb1aId:
+    Value: !Ref SubnetPrivateDb1a
+    Export: { Name: !Sub '${AWS::StackName}-SubnetPrivateDb1aId' }
+
+  SubnetPrivateDb1cId:
+    Value: !Ref SubnetPrivateDb1c
+    Export: { Name: !Sub '${AWS::StackName}-SubnetPrivateDb1cId' }
+
+  NatGateway1aId:
+    Value: !Ref NatGateway1a
+    Export: { Name: !Sub '${AWS::StackName}-NatGateway1aId' }

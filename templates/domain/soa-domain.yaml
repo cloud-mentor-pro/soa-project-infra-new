@@ -1,0 +1,61 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'soa - Domain layer: ACM Certificate for api.{domain} (DNS validated). Independent of networking/security/database — deploy early, in parallel, since DNS validation is the slowest step in the whole pipeline.'
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, prod]
+
+  SubDomain:
+    Type: String
+    Default: api
+    Description: Subdomain prefix for the backend API — result is {SubDomain}.{HostedZoneName}
+
+  HostedZoneName:
+    Type: String
+    Description: Root domain, e.g. example.com — Hosted Zone must already exist in this account
+
+  HostedZoneId:
+    Type: String
+    Description: Route53 Hosted Zone ID for HostedZoneName (aws route53 list-hosted-zones)
+
+Resources:
+
+  # ── ACM Certificate — api.{domain}, DNS validation auto-creates CNAME ──────
+  AcmCertificateApi:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Sub '${SubDomain}.${HostedZoneName}'
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Sub '${SubDomain}.${HostedZoneName}'
+          HostedZoneId: !Ref HostedZoneId
+      Tags:
+        - { Key: Name,        Value: !Sub '${Environment}-soa-cert-${SubDomain}' }
+        - { Key: Environment, Value: !Ref Environment }
+        - { Key: Project,     Value: soa }
+        - { Key: ManagedBy,   Value: CloudFormation }
+        - { Key: Layer,       Value: domain }
+
+Outputs:
+  CertificateArn:
+    Value: !Ref AcmCertificateApi
+    Export: { Name: !Sub '${AWS::StackName}-CertificateArn' }
+
+  DomainName:
+    Value: !Sub '${SubDomain}.${HostedZoneName}'
+    Export: { Name: !Sub '${AWS::StackName}-DomainName' }
+
+  # Passthrough — compute stack imports these instead of re-declaring the same
+  # values in its own parameter file (single source of truth for domain config).
+  HostedZoneId:
+    Value: !Ref HostedZoneId
+    Export: { Name: !Sub '${AWS::StackName}-HostedZoneId' }
+
+  HostedZoneName:
+    Value: !Ref HostedZoneName
+    Export: { Name: !Sub '${AWS::StackName}-HostedZoneName' }
+
+  SubDomain:
+    Value: !Ref SubDomain
+    Export: { Name: !Sub '${AWS::StackName}-SubDomain' }

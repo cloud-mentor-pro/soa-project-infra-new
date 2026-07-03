@@ -1,0 +1,18 @@
+[
+  {
+    "ParameterKey": "Environment",
+    "ParameterValue": "dev"
+  },
+  {
+    "ParameterKey": "SubDomain",
+    "ParameterValue": "api-dev"
+  },
+  {
+    "ParameterKey": "HostedZoneName",
+    "ParameterValue": "codeland.cloudmentor.pro"
+  },
+  {
+    "ParameterKey": "HostedZoneId",
+    "ParameterValue": "Z0430621YGYAWO2UBJ7J"
+  }
+]

@@ -1,0 +1,19 @@
+[
+  { "ParameterKey": "Environment",             "ParameterValue": "prod" },
+  { "ParameterKey": "NetworkingStackName",     "ParameterValue": "prod-soa-networking" },
+  { "ParameterKey": "SecurityStackName",       "ParameterValue": "prod-soa-security" },
+  { "ParameterKey": "DatabaseStackName",       "ParameterValue": "prod-soa-database" },
+  { "ParameterKey": "ConfigStackName",         "ParameterValue": "prod-soa-config" },
+  { "ParameterKey": "DomainStackName",         "ParameterValue": "prod-soa-domain" },
+  { "ParameterKey": "AppDomainName",           "ParameterValue": "api.REPLACE_WITH_YOUR_DOMAIN.com" },
+  { "ParameterKey": "ServiceName",             "ParameterValue": "api" },
+  { "ParameterKey": "ContainerPort",           "ParameterValue": "80" },
+  { "ParameterKey": "ContainerCpu",            "ParameterValue": "512" },
+  { "ParameterKey": "ContainerMemory",         "ParameterValue": "1024" },
+  { "ParameterKey": "DesiredCount",            "ParameterValue": "2" },
+  { "ParameterKey": "HealthCheckPath",         "ParameterValue": "/users/ping" },
+  { "ParameterKey": "TargetCPUUtilization",    "ParameterValue": "60" },
+  { "ParameterKey": "TargetMemoryUtilization", "ParameterValue": "70" },
+  { "ParameterKey": "MinCapacity",             "ParameterValue": "2" },
+  { "ParameterKey": "MaxCapacity",             "ParameterValue": "10" }
+]

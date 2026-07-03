@@ -1,0 +1,5 @@
+[
+  { "ParameterKey": "Environment",         "ParameterValue": "dev" },
+  { "ParameterKey": "NetworkingStackName", "ParameterValue": "dev-soa-networking" },
+  { "ParameterKey": "ContainerPort",       "ParameterValue": "80" }
+]

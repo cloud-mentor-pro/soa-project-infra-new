@@ -1,0 +1,10 @@
+[
+  { "ParameterKey": "Environment",         "ParameterValue": "prod" },
+  { "ParameterKey": "NetworkingStackName", "ParameterValue": "prod-soa-networking" },
+  { "ParameterKey": "SecurityStackName",   "ParameterValue": "prod-soa-security" },
+  { "ParameterKey": "DBInstanceClass",     "ParameterValue": "db.t3.small" },
+  { "ParameterKey": "DBAllocatedStorage",  "ParameterValue": "50" },
+  { "ParameterKey": "DBEngineVersion",     "ParameterValue": "18.3" },
+  { "ParameterKey": "DBName",              "ParameterValue": "prod" },
+  { "ParameterKey": "MasterUsername",      "ParameterValue": "postgres" }
+]

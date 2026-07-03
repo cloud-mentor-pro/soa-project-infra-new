@@ -1,0 +1,7 @@
+[
+  { "ParameterKey": "Environment",         "ParameterValue": "prod" },
+  { "ParameterKey": "NetworkingStackName", "ParameterValue": "prod-soa-networking" },
+  { "ParameterKey": "SecurityStackName",   "ParameterValue": "prod-soa-security" },
+  { "ParameterKey": "DatabaseStackName",   "ParameterValue": "prod-soa-database" },
+  { "ParameterKey": "InstanceType",        "ParameterValue": "t3.micro" }
+]

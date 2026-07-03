@@ -1,0 +1,10 @@
+[
+  { "ParameterKey": "Environment",             "ParameterValue": "dev" },
+  { "ParameterKey": "VpcCidr",                 "ParameterValue": "10.0.0.0/16" },
+  { "ParameterKey": "PublicSubnet1aCidr",      "ParameterValue": "10.0.1.0/24" },
+  { "ParameterKey": "PublicSubnet1cCidr",      "ParameterValue": "10.0.2.0/24" },
+  { "ParameterKey": "PrivateAppSubnet1aCidr",  "ParameterValue": "10.0.11.0/24" },
+  { "ParameterKey": "PrivateAppSubnet1cCidr",  "ParameterValue": "10.0.12.0/24" },
+  { "ParameterKey": "PrivateDbSubnet1aCidr",   "ParameterValue": "10.0.21.0/24" },
+  { "ParameterKey": "PrivateDbSubnet1cCidr",   "ParameterValue": "10.0.22.0/24" }
+]

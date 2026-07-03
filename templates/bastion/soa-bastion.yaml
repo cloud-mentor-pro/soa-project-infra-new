@@ -1,0 +1,180 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'soa - Bastion layer: EC2 in private subnet, SSM Session Manager only — no KeyPair, no SSH, no public IP'
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, prod]
+
+  NetworkingStackName:
+    Type: String
+    Description: e.g. dev-soa-networking
+
+  SecurityStackName:
+    Type: String
+    Description: e.g. dev-soa-security
+
+  DatabaseStackName:
+    Type: String
+    Description: e.g. dev-soa-database
+
+  InstanceType:
+    Type: String
+    Default: t3.micro
+    AllowedValues: [t2.micro, t3.micro, t3.small, t3.medium]
+
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+
+Resources:
+
+  # ── IAM — SSM only + scoped read access to this env's DB secret/params ────
+  BastionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Environment}-soa-role-bastion'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: ReadAppSecrets
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  Fn::ImportValue: !Sub '${DatabaseStackName}-DbSecretArn'
+              - Effect: Allow
+                Action: ssm:GetParameter
+                Resource:
+                  - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/soa/${Environment}/*'
+      Tags:
+        - { Key: Name,        Value: !Sub '${Environment}-soa-role-bastion' }
+        - { Key: Environment, Value: !Ref Environment }
+        - { Key: Project,     Value: soa }
+        - { Key: ManagedBy,   Value: CloudFormation }
+        - { Key: Layer,       Value: bastion }
+
+  BastionInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub '${Environment}-soa-profile-bastion'
+      Roles:
+        - !Ref BastionRole
+
+  # ── EC2 — private subnet, no public IP, no KeyName ─────────────────────────
+  BastionInstance:
+    Type: AWS::EC2::Instance
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT10M
+        Count: 1
+    Properties:
+      ImageId: !Ref LatestAmiId
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: !Ref BastionInstanceProfile
+      SubnetId:
+        Fn::ImportValue: !Sub '${NetworkingStackName}-SubnetPrivateApp1aId'
+      SecurityGroupIds:
+        - Fn::ImportValue: !Sub '${SecurityStackName}-SecurityGroupBastionId'
+      UserData:
+        Fn::Base64:
+          Fn::Sub:
+            - |
+              #!/bin/bash
+              set -euo pipefail
+              trap '/opt/aws/bin/cfn-signal -e 1 --stack ${AWS::StackName} --resource BastionInstance --region ${AWS::Region}' ERR
+
+              yum update -y
+
+              # PostgreSQL client 18 — có sẵn trong repo gốc AL2023, không cần add PGDG repo
+              # (PGDG repo build cho RHEL thật, cần /etc/redhat-release — AL2023 không có, sẽ conflict)
+              # Phải khớp major version với DBEngineVersion (database layer)
+              dnf install -y postgresql18
+
+              # Dev tools — không cài "curl" full: AL2023 có sẵn curl-minimal, đủ dùng
+              # cho mọi lệnh HTTPS trong script này. Cài curl full sẽ conflict với curl-minimal.
+              yum install -y git htop tree wget vim nano jq
+
+              # Node.js LTS + pnpm
+              curl -fsSL https://rpm.nodesource.com/setup_lts.x | bash -
+              yum install -y nodejs
+              npm install -g pnpm
+
+              # AWS CLI v2 đã có sẵn trong AL2023 base AMI — không cần cài lại
+
+              # Docker + Compose + buildx
+              yum install -y docker
+              systemctl enable docker
+              systemctl start docker
+              usermod -aG docker ec2-user
+              curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+              chmod +x /usr/local/bin/docker-compose
+              ln -s /usr/local/bin/docker-compose /usr/bin/docker-compose
+              curl -sSfL https://github.com/docker/buildx/releases/download/v0.17.1/buildx-v0.17.1.linux-amd64 -o /usr/libexec/docker/cli-plugins/docker-buildx
+              chmod +x /usr/libexec/docker/cli-plugins/docker-buildx
+              docker buildx install
+
+              mkdir -p /home/ec2-user/projects
+              chown ec2-user:ec2-user /home/ec2-user/projects
+
+              # connect-db.sh — reads db-url from SSM + credentials from Secrets Manager,
+              # both auto-populated by the config/database stacks. No manual copy/paste.
+              cat > /home/ec2-user/connect-db.sh << 'SCRIPT'
+              #!/bin/bash
+              set -euo pipefail
+
+              DB_SECRET_ARN=$(aws ssm get-parameter --name "/soa/${EnvironmentVal}/db-secret-arn" --query "Parameter.Value" --output text)
+              # DB_URL là hostname thuần (không có port/path) — khớp convention DB_URL của
+              # backend app (xem soa-config.yaml ParamDbUrl để biết lý do).
+              DB_HOST=$(aws ssm get-parameter --name "/soa/${EnvironmentVal}/db-url" --query "Parameter.Value" --output text)
+
+              DB_SECRET=$(aws secretsmanager get-secret-value --secret-id "$DB_SECRET_ARN" --query SecretString --output text)
+              DB_USERNAME=$(echo "$DB_SECRET" | jq -r .username)
+              DB_PASSWORD=$(echo "$DB_SECRET" | jq -r .password)
+
+              DB_PORT=5432
+              DB_NAME=${DbNameVal}
+
+              echo "Connecting to PostgreSQL at $DB_HOST:$DB_PORT/$DB_NAME..."
+              PGPASSWORD=$DB_PASSWORD psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USERNAME" -d "$DB_NAME"
+              SCRIPT
+              chmod +x /home/ec2-user/connect-db.sh
+              chown ec2-user:ec2-user /home/ec2-user/connect-db.sh
+
+              # get-soa-params.sh — quick lookup of every soa SSM parameter for this env
+              cat > /home/ec2-user/get-soa-params.sh << 'SCRIPT'
+              #!/bin/bash
+              echo "=== soa/${EnvironmentVal} parameters ==="
+              aws ssm get-parameters-by-path --path "/soa/${EnvironmentVal}/" --query "Parameters[*].{Name:Name,Value:Value}" --output table
+              SCRIPT
+              chmod +x /home/ec2-user/get-soa-params.sh
+              chown ec2-user:ec2-user /home/ec2-user/get-soa-params.sh
+
+              /opt/aws/bin/cfn-signal -e 0 --stack ${AWS::StackName} --resource BastionInstance --region ${AWS::Region}
+            - EnvironmentVal: !Ref Environment
+              DbNameVal: { Fn::ImportValue: !Sub '${DatabaseStackName}-DbName' }
+      Tags:
+        - { Key: Name,        Value: !Sub '${Environment}-soa-ec2-bastion' }
+        - { Key: Environment, Value: !Ref Environment }
+        - { Key: Project,     Value: soa }
+        - { Key: ManagedBy,   Value: CloudFormation }
+        - { Key: Layer,       Value: bastion }
+
+Outputs:
+  BastionInstanceId:
+    Value: !Ref BastionInstance
+    Export: { Name: !Sub '${AWS::StackName}-BastionInstanceId' }
+
+  # Không hardcode --profile — đó là setup cục bộ của người deploy, CloudFormation không
+  # biết chắc tên profile thật. Thêm --profile <profile-của-bạn> khi chạy (xem DEPLOY.md).
+  SsmSessionCommand:
+    Value: !Sub 'aws ssm start-session --target ${BastionInstance} --region ${AWS::Region}'
+    Export: { Name: !Sub '${AWS::StackName}-SsmSessionCommand' }

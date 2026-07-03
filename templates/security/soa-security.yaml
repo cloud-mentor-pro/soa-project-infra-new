@@ -1,0 +1,140 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'soa - Security layer: Security Groups for ALB, ECS, RDS, Bastion'
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, prod]
+
+  NetworkingStackName:
+    Type: String
+    Description: e.g. dev-soa-networking
+
+  ContainerPort:
+    Type: Number
+    Default: 80
+    Description: Port the ECS container listens on (must match compute layer ContainerPort)
+
+Resources:
+
+  # ── ALB — public HTTP from internet ────────────────────────────────────────
+  SecurityGroupAlb:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ALB - allow HTTP and HTTPS from internet
+      GroupName: !Sub '${Environment}-soa-sg-alb'
+      VpcId:
+        Fn::ImportValue: !Sub '${NetworkingStackName}-VpcId'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: HTTP from internet (redirected to HTTPS)
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: HTTPS from internet
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 0.0.0.0/0
+          Description: Allow all outbound
+      Tags:
+        - { Key: Name,        Value: !Sub '${Environment}-soa-sg-alb' }
+        - { Key: Environment, Value: !Ref Environment }
+        - { Key: Project,     Value: soa }
+        - { Key: ManagedBy,   Value: CloudFormation }
+        - { Key: Layer,       Value: security }
+
+  # ── ECS tasks — only from ALB ───────────────────────────────────────────────
+  SecurityGroupEcs:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ECS tasks - allow traffic from ALB only
+      GroupName: !Sub '${Environment}-soa-sg-ecs-task'
+      VpcId:
+        Fn::ImportValue: !Sub '${NetworkingStackName}-VpcId'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref ContainerPort
+          ToPort: !Ref ContainerPort
+          SourceSecurityGroupId: !Ref SecurityGroupAlb
+          Description: App traffic from ALB only
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 0.0.0.0/0
+          Description: Allow all outbound (ECR pull, DB, internet via NAT)
+      Tags:
+        - { Key: Name,        Value: !Sub '${Environment}-soa-sg-ecs-task' }
+        - { Key: Environment, Value: !Ref Environment }
+        - { Key: Project,     Value: soa }
+        - { Key: ManagedBy,   Value: CloudFormation }
+        - { Key: Layer,       Value: security }
+
+  # ── Bastion — no ingress needed, SSM Session Manager is agent-initiated ────
+  SecurityGroupBastion:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Bastion - no inbound rules, SSM Session Manager only
+      GroupName: !Sub '${Environment}-soa-sg-bastion'
+      VpcId:
+        Fn::ImportValue: !Sub '${NetworkingStackName}-VpcId'
+      SecurityGroupIngress: []
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 0.0.0.0/0
+          Description: Allow all outbound (SSM endpoints, DB, package installs)
+      Tags:
+        - { Key: Name,        Value: !Sub '${Environment}-soa-sg-bastion' }
+        - { Key: Environment, Value: !Ref Environment }
+        - { Key: Project,     Value: soa }
+        - { Key: ManagedBy,   Value: CloudFormation }
+        - { Key: Layer,       Value: security }
+
+  # ── RDS — only from ECS tasks and Bastion, on 5432 ─────────────────────────
+  SecurityGroupDb:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: RDS PostgreSQL - allow 5432 from ECS tasks and Bastion only
+      GroupName: !Sub '${Environment}-soa-sg-db'
+      VpcId:
+        Fn::ImportValue: !Sub '${NetworkingStackName}-VpcId'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref SecurityGroupEcs
+          Description: PostgreSQL from ECS tasks
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref SecurityGroupBastion
+          Description: PostgreSQL from Bastion
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 0.0.0.0/0
+          Description: Allow all outbound (explicit - RDS does not initiate outbound in practice)
+      Tags:
+        - { Key: Name,        Value: !Sub '${Environment}-soa-sg-db' }
+        - { Key: Environment, Value: !Ref Environment }
+        - { Key: Project,     Value: soa }
+        - { Key: ManagedBy,   Value: CloudFormation }
+        - { Key: Layer,       Value: security }
+
+Outputs:
+  SecurityGroupAlbId:
+    Value: !Ref SecurityGroupAlb
+    Export: { Name: !Sub '${AWS::StackName}-SecurityGroupAlbId' }
+
+  SecurityGroupEcsId:
+    Value: !Ref SecurityGroupEcs
+    Export: { Name: !Sub '${AWS::StackName}-SecurityGroupEcsId' }
+
+  SecurityGroupBastionId:
+    Value: !Ref SecurityGroupBastion
+    Export: { Name: !Sub '${AWS::StackName}-SecurityGroupBastionId' }
+
+  SecurityGroupDbId:
+    Value: !Ref SecurityGroupDb
+    Export: { Name: !Sub '${AWS::StackName}-SecurityGroupDbId' }

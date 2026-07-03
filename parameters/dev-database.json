@@ -1,0 +1,10 @@
+[
+  { "ParameterKey": "Environment",         "ParameterValue": "dev" },
+  { "ParameterKey": "NetworkingStackName", "ParameterValue": "dev-soa-networking" },
+  { "ParameterKey": "SecurityStackName",   "ParameterValue": "dev-soa-security" },
+  { "ParameterKey": "DBInstanceClass",     "ParameterValue": "db.t3.micro" },
+  { "ParameterKey": "DBAllocatedStorage",  "ParameterValue": "20" },
+  { "ParameterKey": "DBEngineVersion",     "ParameterValue": "18.3" },
+  { "ParameterKey": "DBName",              "ParameterValue": "dev" },
+  { "ParameterKey": "MasterUsername",      "ParameterValue": "postgres" }
+]
